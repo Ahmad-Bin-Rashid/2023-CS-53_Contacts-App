@@ -3,7 +3,17 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
+    android:gravity="center_horizontal"
     android:padding="20dp">
+
+    <ImageView
+        android:id="@+id/ivEditContactImage"
+        android:layout_width="80dp"
+        android:layout_height="80dp"
+        android:src="@android:drawable/ic_menu_camera"
+        android:scaleType="centerCrop"
+        android:background="@android:color/darker_gray"
+        android:layout_marginBottom="16dp" />
 
     <EditText
         android:id="@+id/etEditName"

@@ -2,33 +2,59 @@ package com.example.contactapp
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.provider.ContactsContract
 import android.view.LayoutInflater
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SearchView
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-
-
+import java.util.Locale
 
 class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener {
     private lateinit var etName: EditText
     private lateinit var etPhone: EditText
+    private lateinit var ivContactImage: ImageView
     private lateinit var btnSave: Button
     private lateinit var btnLoadContacts: Button
+    private lateinit var btnSort: Button
+    private lateinit var searchView: SearchView
     private lateinit var recyclerViewContacts: RecyclerView
 
     private lateinit var contactAdapter: ContactAdapter
     private val contactList = mutableListOf<Contact>()
+    private var selectedImageUri: Uri? = null
+    private var isAscending = true
+
+    // State for editing profile picture
+    private var tempEditImageUri: Uri? = null
+    private var ivEditPreview: ImageView? = null
+
+    // for profile picture selection
+    private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri?.let {
+            if (ivEditPreview != null) {
+                // Currently in Edit Dialog
+                tempEditImageUri = it
+                ivEditPreview?.setImageURI(it)
+            } else {
+                // Currently in Main Screen (Adding new)
+                selectedImageUri = it
+                ivContactImage.setImageURI(it)
+            }
+        }
+    }
 
     // for contact loading permission request
     private val requestContactsPermission =
@@ -48,8 +74,11 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
         // Initialize UI components
         etName = findViewById(R.id.etName)
         etPhone = findViewById(R.id.etPhone)
+        ivContactImage = findViewById(R.id.ivContactImage)
         btnSave = findViewById(R.id.btnSave)
         btnLoadContacts = findViewById(R.id.btnLoadContacts)
+        btnSort = findViewById(R.id.btnSort)
+        searchView = findViewById(R.id.searchView)
         recyclerViewContacts = findViewById(R.id.recyclerViewContacts)
 
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
@@ -63,6 +92,12 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
         recyclerViewContacts.layoutManager = LinearLayoutManager(this)
         recyclerViewContacts.adapter = contactAdapter
 
+        // Profile Picture Click Listener
+        ivContactImage.setOnClickListener {
+            ivEditPreview = null // Ensure we know we're adding, not editing
+            pickImage.launch("image/*")
+        }
+
         // Button Click Listeners
         btnSave.setOnClickListener {
             saveContact()
@@ -71,6 +106,22 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
         btnLoadContacts.setOnClickListener {
             checkPermissionAndLoadContacts()
         }
+
+        btnSort.setOnClickListener {
+            sortContacts()
+        }
+
+        // Search Functionality
+        searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
+            override fun onQueryTextSubmit(query: String?): Boolean {
+                return false
+            }
+
+            override fun onQueryTextChange(newText: String?): Boolean {
+                contactAdapter.filter(newText ?: "")
+                return true
+            }
+        })
     }
 
     private fun saveContact() {
@@ -81,16 +132,31 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
             return
         }
 
-        val newContact = Contact(name, phone)
+        val newContact = Contact(name, phone, selectedImageUri)
         contactList.add(newContact)
-        contactAdapter.notifyItemInserted(contactList.size - 1)
+        contactAdapter.updateList(contactList)
         recyclerViewContacts.scrollToPosition(contactList.size - 1)
 
         Toast.makeText(this, "Contact saved successfully", Toast.LENGTH_SHORT).show()
 
+        // Reset inputs
         etName.text.clear()
         etPhone.text.clear()
+        ivContactImage.setImageResource(android.R.drawable.ic_menu_camera)
+        selectedImageUri = null
         etName.requestFocus()
+    }
+
+    private fun sortContacts() {
+        if (isAscending) {
+            contactList.sortBy { it.name.lowercase(Locale.ROOT) }
+            btnSort.text = "Sort Z-A"
+        } else {
+            contactList.sortByDescending { it.name.lowercase(Locale.ROOT) }
+            btnSort.text = "Sort A-Z"
+        }
+        isAscending = !isAscending
+        contactAdapter.updateList(contactList)
     }
 
     private fun validateInputs(name: String, phone: String, nameInput: EditText, phoneInput: EditText): Boolean {
@@ -112,16 +178,15 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
         return isValid
     }
 
-    override fun onItemClick(position: Int) {
-        val contact = contactList[position]
+    override fun onItemClick(contact: Contact) {
         Toast.makeText(this, "Contact: ${contact.name}\nPhone: ${contact.phone}", Toast.LENGTH_SHORT).show()
     }
 
-    override fun onEditClick(position: Int) {
-        showEditDialog(position)
+    override fun onEditClick(contact: Contact, position: Int) {
+        showEditDialog(contact, position)
     }
 
-    override fun onDeleteClick(position: Int) {
+    override fun onDeleteClick(contact: Contact, position: Int) {
         showDeleteDialog(position)
     }
 
@@ -131,8 +196,7 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
             .setMessage("Are you sure you want to delete this contact?")
             .setPositiveButton("Yes") { _, _ ->
                 contactList.removeAt(position)
-                contactAdapter.notifyItemRemoved(position)
-                contactAdapter.notifyItemRangeChanged(position, contactList.size)
+                contactAdapter.updateList(contactList)
                 Toast.makeText(this, "Contact deleted", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("No", null)
@@ -200,25 +264,40 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
 
         contactList.clear()
         contactList.addAll(loadedContacts)
-        contactAdapter.notifyDataSetChanged()
+        contactAdapter.updateList(contactList)
 
         Toast.makeText(this, "${loadedContacts.size} contacts loaded", Toast.LENGTH_SHORT).show()
     }
 
-    private fun showEditDialog(position: Int) {
+    private fun showEditDialog(contact: Contact, position: Int) {
         val dialogView = LayoutInflater.from(this).inflate(R.layout.activity_dialog_edit_item, null)
         val etEditName = dialogView.findViewById<EditText>(R.id.etEditName)
         val etEditPhone = dialogView.findViewById<EditText>(R.id.etEditPhone)
+        val ivEditContactImage = dialogView.findViewById<ImageView>(R.id.ivEditContactImage)
 
-        val contact = contactList[position]
         etEditName.setText(contact.name)
         etEditPhone.setText(contact.phone)
+        
+        // Initialize image in dialog
+        tempEditImageUri = contact.imageUri
+        if (tempEditImageUri != null) {
+            ivEditContactImage.setImageURI(tempEditImageUri)
+        } else {
+            ivEditContactImage.setImageResource(android.R.drawable.ic_menu_camera)
+        }
+
+        ivEditContactImage.setOnClickListener {
+            ivEditPreview = ivEditContactImage
+            pickImage.launch("image/*")
+        }
 
         val dialog = AlertDialog.Builder(this)
             .setTitle("Edit Contact")
             .setView(dialogView)
             .setPositiveButton("Update", null)
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton("Cancel") { _, _ ->
+                ivEditPreview = null // Clear reference on cancel
+            }
             .create()
 
         dialog.show()
@@ -230,10 +309,18 @@ class MainActivity : AppCompatActivity(), ContactAdapter.OnContactActionListener
             if (validateInputs(updatedName, updatedPhone, etEditName, etEditPhone)) {
                 contact.name = updatedName
                 contact.phone = updatedPhone
+                contact.imageUri = tempEditImageUri // Set the updated URI
+                
                 contactAdapter.notifyItemChanged(position)
                 Toast.makeText(this, "Contact updated", Toast.LENGTH_SHORT).show()
+                
+                ivEditPreview = null // Clear reference after success
                 dialog.dismiss()
             }
+        }
+        
+        dialog.setOnDismissListener {
+            ivEditPreview = null // Ensure it's cleared when dialog goes away
         }
     }
 }
